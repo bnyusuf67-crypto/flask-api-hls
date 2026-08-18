@@ -1,5 +1,6 @@
 import os
 import subprocess
+import threading
 from flask import Flask, send_from_directory
 
 # HLS segmentlerinin kaydedileceği klasörü otomatik oluştur
@@ -45,21 +46,26 @@ def start_stream_generator():
 
 @app.route("/")
 def index():
-    return "<h1>ATV Avrupa HLS Streamer Aktif!</h1><p>Yayını başlatmak için: <a href='/start'>/start</a></p><p>Oynatma listesi: <a href='/hls_stream/master.m3u8'>/hls_stream/master.m3u8</a></p>"
+    return "<h1>ATV Avrupa HLS Streamer Aktif!</h1><p>Oynatma listesi: <a href='/hls_stream/master.m3u8'>/hls_stream/master.m3u8</a></p>"
 
 @app.route("/start")
 def trigger_stream():
     try:
-        start_stream_generator()
-        return "ATV Avrupa yayını başarıyla başlatıldı ve işleniyor! Birkaç saniye sonra /hls_stream/master.m3u8 adresinden izleyebilirsiniz."
+        # İsteğe bağlı olarak manuel tetikleme için de kalabilir
+        threading.Thread(target=start_stream_generator, daemon=True).start()
+        return "ATV Avrupa yayını tetiklendi ve arka planda işleniyor!"
     except Exception as e:
         return f"Hata oluştu: {str(e)}", 500
 
-# EKLENEN KISIM: HLS dosyalarının dışarıdan okunmasını sağlayan rota
+# HLS dosyalarının dışarıdan okunmasını sağlayan rota
 @app.route("/hls_stream/<path:filename>")
 def serve_hls(filename):
     return send_from_directory("hls_stream", filename)
 
 if __name__ == "__main__":
+    # Flask sunucusu başlar başlamaz arka planda akışı otomatik başlat
+    auto_thread = threading.Thread(target=start_stream_generator, daemon=True)
+    auto_thread.start()
+    
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
