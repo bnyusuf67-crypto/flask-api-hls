@@ -12,14 +12,18 @@ def start_stream_generator():
     target_url = "https://www.atvavrupa.tv/canli-yayin"
     
     try:
+        print("Yayinkaynağı çözümleniyor (yt-dlp)...")
         ydl_cmd = ["yt-dlp", "-g", target_url]
         output = subprocess.check_output(ydl_cmd, text=True).strip()
         resolved_url = output.splitlines()[0] if output else ""
-    except Exception:
+    except Exception as e:
+        print(f"yt-dlp hatası: {e}")
         resolved_url = ""
 
     if not resolved_url:
         resolved_url = target_url
+
+    print(f"Kullanılacak URL: {resolved_url}")
 
     streamlink_cmd = [
         "streamlink",
@@ -40,9 +44,14 @@ def start_stream_generator():
         "hls_stream/master.m3u8"
     ]
     
-    p1 = subprocess.Popen(streamlink_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    p2 = subprocess.Popen(ffmpeg_cmd, stdin=p1.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    p1.stdout.close()
+    try:
+        # Hataları daha rahat görmek için stderr'i DEVNULL yerine kapatabilir veya loglayabilirsiniz
+        p1 = subprocess.Popen(streamlink_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p2 = subprocess.Popen(ffmpeg_cmd, stdin=p1.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        p1.stdout.close()
+        print("Streamlink ve FFmpeg başarıyla başlatıldı.")
+    except Exception as e:
+        print(f"Yayın başlatma hatası: {e}")
 
 @app.route("/")
 def index():
@@ -51,19 +60,16 @@ def index():
 @app.route("/start")
 def trigger_stream():
     try:
-        # İsteğe bağlı olarak manuel tetikleme için de kalabilir
         threading.Thread(target=start_stream_generator, daemon=True).start()
-        return "ATV Avrupa yayını tetiklendi ve arka planda işleniyor!"
+        return "Yayın tetiklendi!"
     except Exception as e:
         return f"Hata oluştu: {str(e)}", 500
 
-# HLS dosyalarının dışarıdan okunmasını sağlayan rota
 @app.route("/hls_stream/<path:filename>")
 def serve_hls(filename):
     return send_from_directory("hls_stream", filename)
 
 if __name__ == "__main__":
-    # Flask sunucusu başlar başlamaz arka planda akışı otomatik başlat
     auto_thread = threading.Thread(target=start_stream_generator, daemon=True)
     auto_thread.start()
     
