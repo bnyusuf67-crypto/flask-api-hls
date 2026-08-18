@@ -12,7 +12,7 @@ def start_stream_generator(target_url):
     streamlink_cmd = [
         "streamlink",
         "--stdout",               # Çıktıyı doğrudan boruya ver
-        target_url,
+        "https://www.atvavrupa.tv/canli-yayin,
         "best"                    # En iyi kalitede al (veya 720p, 480p yazabilirsin)
     ]
     
