@@ -1,8 +1,10 @@
-import subprocess
 import os
-from flask import Flask
+import subprocess
+from flask import Flask, render_template_string
 
+# HLS segmentlerinin kaydedileceği klasörü otomatik oluştur
 os.makedirs("hls_stream", exist_ok=True)
+
 app = Flask(__name__)
 
 def start_stream_generator(target_url):
@@ -33,6 +35,18 @@ def start_stream_generator(target_url):
     
     # p1'in stdout akışını serbest bırak
     p1.stdout.close()
+
+@app.route("/")
+def index():
+    return "<h1>Live HLS Streamer Aktif!</h1><p>Yayın üreticisini tetiklemek için /start/&lt;url&gt; adresini kullanabilirsiniz.</p>"
+
+@app.route("/start/<path:url>")
+def trigger_stream(url):
+    try:
+        start_stream_generator(url)
+        return f"Yayın başarıyla başlatıldı: {url}"
+    except Exception as e:
+        return f"Hata oluştu: {str(e)}", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
