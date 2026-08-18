@@ -1,4 +1,5 @@
 Flask
+ffmpeg
 yt-dlp
 streamlink
 requests
