@@ -1,4 +1,9 @@
 import subprocess
+import os
+from flask import Flask
+
+os.makedirs("hls_stream", exist_ok=True)
+app = Flask(__name__)
 
 def start_stream_generator(target_url):
     # 1. Streamlink komutu: Hedef adresteki yayını çözer ve stdout'a (çıktıya) verir
