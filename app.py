@@ -118,6 +118,7 @@ def index():
     return """
     <h1>ATV Avrupa HLS Streamer</h1>
     <ul>
+        <li><a href='/start'>Başlatma Tuşu</a></li>    
         <li><a href='/hls_stream/master.m3u8'>Master Playlist</a></li>
         <li><a href='/hls_stream/atvavrupa_576p.m3u8'>576p Playlist</a></li>
         <li><a href='/hls_stream/atvavrupa_360p.m3u8'>360p Playlist</a></li>
@@ -138,8 +139,11 @@ def serve_hls(filename):
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
+def init_background_thread():
     trigger_thread = threading.Thread(target=periodic_site_trigger, daemon=True)
     trigger_thread.start()
+
+init_background_thread()
     
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
