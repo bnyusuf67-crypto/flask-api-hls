@@ -134,11 +134,13 @@ def trigger_stream():
 
 @app.route("/hls_stream/<path:filename>")
 def serve_hls(filename):
-    return send_from_directory(HLS_DIR, filename)
+    response = send_from_directory(HLS_DIR, filename)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
 
-if __name__ == "__main__":
     trigger_thread = threading.Thread(target=periodic_site_trigger, daemon=True)
     trigger_thread.start()
     
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
