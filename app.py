@@ -104,7 +104,7 @@ def start_stream_generator():
     ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def periodic_site_trigger():
-    target_start_url = "https://flaskapihls-atv-avrupa-trkvzlive.onrender.com/start"
+    target_start_url = "https://flaskapihls-atv-avrupa-hd-trkvzlive.onrender.com/start"
     time.sleep(5)
     while True:
         try:
