@@ -1,5 +1,3 @@
 Flask
 gunicorn
-yt-dlp
-streamlink
 requests
