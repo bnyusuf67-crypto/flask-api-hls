@@ -21,6 +21,10 @@ ffmpeg_process = None
 is_running = True  # Varsayılan olarak aktif
 process_lock = threading.Lock()  # Çakışmaları önleyen kilit mekanizması
 
+# Token Yenileme Ayarları
+last_start_time = 0
+TOKEN_REFRESH_INTERVAL = 2 * 60 * 60  # 2 saat (7200 saniye)
+
 # ==========================================
 # 1. ATV AVRUPA (TURKUVAZ) URL & TOKEN ALMA
 # ==========================================
@@ -91,16 +95,17 @@ atvavrupa_360p.m3u8"""
 
 def start_ffmpeg_process():
     """FFmpeg sürecini Thread Lock koruması ile güvenli bir şekilde başlatır."""
-    global ffmpeg_process
+    global ffmpeg_process, last_start_time
 
     with process_lock:
-        if ffmpeg_process and ffmpeg_process.poll() is None:
-            return True
-
         token_m3u8_url = get_atvavrupa_token_url()
         if not token_m3u8_url:
             print("[HATA] Akış URL'si (Token) alınamadı, FFmpeg başlatılamıyor.")
             return False
+
+        # Halihazırda çalışan FFmpeg varsa kapatılıp taze token ile yeniden başlatılır
+        if ffmpeg_process and ffmpeg_process.poll() is None:
+            ffmpeg_process.kill()
 
         url_576p = build_variant_url(token_m3u8_url, "_576p")
         url_360p = build_variant_url(token_m3u8_url, "_360p")
@@ -126,20 +131,28 @@ def start_ffmpeg_process():
         ]
 
         ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("[BİLGİ] ATV Avrupa FFmpeg süreci otomatik olarak başlatıldı.")
+        last_start_time = time.time()  # Başlatma zamanını kaydet
+        print("[BİLGİ] ATV Avrupa FFmpeg süreci taze Token ile başlatıldı.")
         return True
 
 # ==========================================
 # 3. WATCHDOG (OTOMATİK İZLEYİCİ VE YENİDEN BAŞLATICI)
 # ==========================================
 def stream_watchdog():
-    """Süreci arka planda denetler, FFmpeg kapandığında taze token ile yeniden başlatır."""
-    global ffmpeg_process, is_running
+    """Süreci denetler; FFmpeg çöktüğünde VEYA 2 saat dolduğunda taze token ile yeniler."""
+    global ffmpeg_process, is_running, last_start_time
     while True:
         time.sleep(8)
         if is_running:
-            if ffmpeg_process is None or ffmpeg_process.poll() is not None:
-                print("[UYARI] FFmpeg aktif değil. Watchdog taze Token ile yayını başlatıyor...")
+            time_passed = time.time() - last_start_time
+            
+            # FFmpeg durmuşsa VEYA 2 saatlik önleyici yenileme zamanı geldiyse
+            if ffmpeg_process is None or ffmpeg_process.poll() is not None or time_passed >= TOKEN_REFRESH_INTERVAL:
+                if time_passed >= TOKEN_REFRESH_INTERVAL:
+                    print("[BİLGİ] 2 saatlik Token süresi doldu. Önleyici otomatik yenileme yapılıyor...")
+                else:
+                    print("[UYARI] FFmpeg aktif değil. Watchdog yayını başlatıyor...")
+                
                 start_ffmpeg_process()
 
 watchdog_thread = threading.Thread(target=stream_watchdog, daemon=True)
@@ -165,7 +178,13 @@ def index():
 def health_check():
     """UptimeRobot veya Cron-Job servislerinin Render'ı uyanık tutması için sağlık rotası."""
     status = "running" if (ffmpeg_process and ffmpeg_process.poll() is None) else "restarting"
-    return jsonify({"status": status, "watchdog": is_running}), 200
+    time_passed = int(time.time() - last_start_time) if last_start_time > 0 else 0
+    return jsonify({
+        "status": status,
+        "watchdog": is_running,
+        "uptime_seconds": time_passed,
+        "next_token_refresh_in": max(0, TOKEN_REFRESH_INTERVAL - time_passed)
+    }), 200
 
 @app.route("/restart")
 def force_restart():
