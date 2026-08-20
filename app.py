@@ -201,19 +201,32 @@ def force_restart():
         return jsonify({"status": "success", "message": "Yayın taze token ile yeniden başlatıldı!"}), 200
     return jsonify({"status": "error", "message": "Yayın başlatılırken hata oluştu!"}), 500
 
-@app.route("/hls_stream/<path:filename>")
+@app.route("/hls_stream/<path:filename>", methods=["GET", "OPTIONS"])
 def serve_hls(filename):
-    """Lazy-Load: Yayın dosyası istendiğinde FFmpeg çalışmıyorsa otomatik başlatılır."""
+    global ffmpeg_process
+    
+    # 1. Tarayıcının OPTIONS (Preflight) isteğine onay ver
+    if request.method == "OPTIONS":
+        response = app.make_default_options_response()
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Range"
+        return response
+
+    # 2. LAZY LOAD: İlk izleyici isteğinde yayın başlatılır
     if ffmpeg_process is None or ffmpeg_process.poll() is not None:
+        print("[LAZY LOAD] İlk izleyici isteği geldi. CNN Türk yayını başlatılıyor...")
         start_ffmpeg_process()
-
+        
     response = send_from_directory(HLS_DIR, filename)
+    
+    # 3. hls.js Uyumlu Tam CORS Başlıkları
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Range"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Length, Content-Range"
+    
     return response
-
-# Uygulama ayağa kalkarken ilk tetikleme
-start_ffmpeg_process()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
