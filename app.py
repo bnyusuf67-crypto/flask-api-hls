@@ -6,16 +6,20 @@ import threading
 import time
 import requests
 import urllib3
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, jsonify
 
+# Güvenlik uyarılarını bastır
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 HLS_DIR = "hls_stream"
 os.makedirs(HLS_DIR, exist_ok=True)
 
 app = Flask(__name__)
+
+# Global Durum Değişkenleri
 ffmpeg_process = None
-is_running = False
+is_running = True  # Varsayılan olarak aktif
+process_lock = threading.Lock()  # Çakışmaları önleyen kilit mekanizması
 
 # ==========================================
 # 1. ATV AVRUPA (TURKUVAZ) URL & TOKEN ALMA
@@ -30,12 +34,10 @@ def get_atvavrupa_token_url():
     })
 
     try:
-        # Sayfa içeriğini çek
         html_res = session.get(target_url, verify=False, timeout=15)
         if html_res.status_code != 200:
             return None
 
-        # HTML veya Script içinden video/website ID ayıkla
         video_id_match = re.search(r'data-videoid=["\']([^"\']+)["\']', html_res.text)
         website_id_match = re.search(r'data-websiteid=["\']([^"\']+)["\']', html_res.text)
 
@@ -46,7 +48,6 @@ def get_atvavrupa_token_url():
         video_id = video_id_match.group(1)
         website_id = website_id_match.group(1)
 
-        # Turkuvaz Video API isteği
         api_url = f"https://videojs.tmgrup.com.tr/getvideo/{website_id}/{video_id}"
         api_res = session.get(api_url, verify=False, timeout=10).json()
 
@@ -56,7 +57,6 @@ def get_atvavrupa_token_url():
 
         raw_hls_url = api_res["video"]["VideoSmilUrl"]
 
-        # Turkuvaz Secure Token İsteği
         secure_api = "https://securevideotoken.tmgrup.com.tr/webtv/secure"
         token_res = session.get(secure_api, params={"url": raw_hls_url}, verify=False, timeout=10).json()
 
@@ -78,7 +78,7 @@ def build_variant_url(base_url, suffix):
 # 2. MANİFEST VE FFMPEG AKIŞ YÖNETİMİ
 # ==========================================
 def create_master_manifest():
-    """HLS istemcileri için master.m3u8 dosyasını şablona birebir uygun oluşturur."""
+    """HLS istemcileri için master.m3u8 dosyasını oluşturur."""
     master_content = """#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1200000,NAME=576p,RESOLUTION=1024x576
@@ -90,94 +90,111 @@ atvavrupa_360p.m3u8"""
         f.write(master_content)
 
 def start_ffmpeg_process():
-    """FFmpeg sürecini reconnect koruması ile başlatır."""
+    """FFmpeg sürecini Thread Lock koruması ile güvenli bir şekilde başlatır."""
     global ffmpeg_process
 
-    token_m3u8_url = get_atvavrupa_token_url()
-    if not token_m3u8_url:
-        print("[HATA] Akış URL'si (Token) alınamadı, FFmpeg başlatılamıyor.")
-        return False
+    with process_lock:
+        if ffmpeg_process and ffmpeg_process.poll() is None:
+            return True
 
-    url_576p = build_variant_url(token_m3u8_url, "_576p")
-    url_360p = build_variant_url(token_m3u8_url, "_360p")
+        token_m3u8_url = get_atvavrupa_token_url()
+        if not token_m3u8_url:
+            print("[HATA] Akış URL'si (Token) alınamadı, FFmpeg başlatılamıyor.")
+            return False
 
-    create_master_manifest()
+        url_576p = build_variant_url(token_m3u8_url, "_576p")
+        url_360p = build_variant_url(token_m3u8_url, "_360p")
 
-    if ffmpeg_process and ffmpeg_process.poll() is None:
-        ffmpeg_process.kill()
+        create_master_manifest()
 
-    ffmpeg_cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        # 1. Giriş (576p) Koruma Parametreleri
-        "-reconnect", "1", "-reconnect_at_eof", "1",
-        "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-        "-i", url_576p,
-        # 2. Giriş (360p) Koruma Parametreleri
-        "-reconnect", "1", "-reconnect_at_eof", "1",
-        "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-        "-i", url_360p,
-        # Çıktı 1: 576p -> atvavrupa_576p.m3u8
-        "-map", "0:v?", "-map", "0:a?", "-c", "copy",
-        "-f", "hls", "-hls_time", "4", "-hls_list_size", "10",
-        "-hls_flags", "delete_segments+append_list",
-        os.path.join(HLS_DIR, "atvavrupa_576p.m3u8"),
-        # Çıktı 2: 360p -> atvavrupa_360p.m3u8
-        "-map", "1:v?", "-map", "1:a?", "-c", "copy",
-        "-f", "hls", "-hls_time", "4", "-hls_list_size", "10",
-        "-hls_flags", "delete_segments+append_list",
-        os.path.join(HLS_DIR, "atvavrupa_360p.m3u8")
-    ]
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-reconnect", "1", "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+            "-i", url_576p,
+            "-reconnect", "1", "-reconnect_at_eof", "1",
+            "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+            "-i", url_360p,
+            "-map", "0:v?", "-map", "0:a?", "-c", "copy",
+            "-f", "hls", "-hls_time", "4", "-hls_list_size", "10",
+            "-hls_flags", "delete_segments+append_list",
+            os.path.join(HLS_DIR, "atvavrupa_576p.m3u8"),
+            "-map", "1:v?", "-map", "1:a?", "-c", "copy",
+            "-f", "hls", "-hls_time", "4", "-hls_list_size", "10",
+            "-hls_flags", "delete_segments+append_list",
+            os.path.join(HLS_DIR, "atvavrupa_360p.m3u8")
+        ]
 
-    ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print("[BİLGİ] ATV Avrupa FFmpeg süreci başarıyla başlatıldı.")
-    return True
+        ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("[BİLGİ] ATV Avrupa FFmpeg süreci otomatik olarak başlatıldı.")
+        return True
 
 # ==========================================
 # 3. WATCHDOG (OTOMATİK İZLEYİCİ VE YENİDEN BAŞLATICI)
 # ==========================================
 def stream_watchdog():
-    """FFmpeg durumunu kontrol eder, Token süresi dolup kapandığında otomatik yeniler."""
+    """Süreci arka planda denetler, FFmpeg kapandığında taze token ile yeniden başlatır."""
     global ffmpeg_process, is_running
     while True:
-        time.sleep(10)
+        time.sleep(8)
         if is_running:
             if ffmpeg_process is None or ffmpeg_process.poll() is not None:
-                print("[UYARI] FFmpeg durdu veya Token süresi doldu! Watchdog taze Token ile yayını başlatıyor...")
+                print("[UYARI] FFmpeg aktif değil. Watchdog taze Token ile yayını başlatıyor...")
                 start_ffmpeg_process()
 
+watchdog_thread = threading.Thread(target=stream_watchdog, daemon=True)
+watchdog_thread.start()
+
 # ==========================================
-# FLASK ROTASI VE UYGULAMA BAŞLANGICI
+# 4. FLASK ROTALARI
 # ==========================================
 @app.route("/")
 def index():
     return """
-    <h1>ATV Avrupa HLS Streamer (Auto-Recover)</h1>
+    <h1>ATV Avrupa HLS Streamer (Otomatik Yönetim)</h1>
     <ul>
-        <li><a href='/start'>Başlatma Tuşu</a></li>
         <li><a href='/hls_stream/master.m3u8'>Master Playlist</a></li>
         <li><a href='/hls_stream/atvavrupa_576p.m3u8'>576p Playlist</a></li>
         <li><a href='/hls_stream/atvavrupa_360p.m3u8'>360p Playlist</a></li>
+        <li><a href='/health'>Sağlık Durumu (Health Check)</a></li>
+        <li><a href='/restart'>Acil Durum Yeniden Başlat (Force Restart)</a></li>
     </ul>
     """
 
-@app.route("/start")
-def trigger_stream():
-    global is_running
-    is_running = True
+@app.route("/health")
+def health_check():
+    """UptimeRobot veya Cron-Job servislerinin Render'ı uyanık tutması için sağlık rotası."""
+    status = "running" if (ffmpeg_process and ffmpeg_process.poll() is None) else "restarting"
+    return jsonify({"status": status, "watchdog": is_running}), 200
+
+@app.route("/restart")
+def force_restart():
+    """Acil durumlarda yayını ve FFmpeg sürecini zorla sonlandırıp taze token ile yeniden başlatır."""
+    global ffmpeg_process
+    with process_lock:
+        if ffmpeg_process and ffmpeg_process.poll() is None:
+            ffmpeg_process.kill()
+            ffmpeg_process = None
+            print("[ACİL MÜDAHALE] FFmpeg süreci zorla kapatıldı.")
+
     success = start_ffmpeg_process()
     if success:
-        return "ATV Avrupa Yayını ve Watchdog başarıyla başlatıldı!"
-    return "Yayın başlatılamadı!", 500
+        return jsonify({"status": "success", "message": "Yayın taze token ile yeniden başlatıldı!"}), 200
+    return jsonify({"status": "error", "message": "Yayın başlatılırken hata oluştu!"}), 500
 
 @app.route("/hls_stream/<path:filename>")
 def serve_hls(filename):
+    """Lazy-Load: Yayın dosyası istendiğinde FFmpeg çalışmıyorsa otomatik başlatılır."""
+    if ffmpeg_process is None or ffmpeg_process.poll() is not None:
+        start_ffmpeg_process()
+
     response = send_from_directory(HLS_DIR, filename)
     response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
-# Arka plan izleyicisini (Watchdog) global alanda başlat
-watchdog_thread = threading.Thread(target=stream_watchdog, daemon=True)
-watchdog_thread.start()
+# Uygulama ayağa kalkarken ilk tetikleme
+start_ffmpeg_process()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
