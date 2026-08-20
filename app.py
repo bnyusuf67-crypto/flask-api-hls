@@ -6,7 +6,7 @@ import threading
 import time
 import requests
 import urllib3
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, send_from_directory, jsonify, request, make_response
 
 # Güvenlik uyarılarını bastır
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -24,6 +24,18 @@ process_lock = threading.Lock()  # Çakışmaları önleyen kilit mekanizması
 # Token Yenileme Ayarları
 last_start_time = 0
 TOKEN_REFRESH_INTERVAL = 2 * 60 * 60  # 2 saat (7200 saniye)
+
+# ==========================================
+# 0. GLOBAL CORS VE PREFLIGHT YÖNETİMİ (500 Hatası Önleyici)
+# ==========================================
+@app.after_request
+def add_cors_headers(response):
+    """Tüm yanıtlara (GET, OPTIONS vb.) eksiksiz hls.js uyumlu CORS başlıklarını ekler."""
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS, HEAD"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Range, Authorization"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Length, Content-Range"
+    return response
 
 # ==========================================
 # 1. ATV AVRUPA (TURKUVAZ) URL & TOKEN ALMA
@@ -164,7 +176,7 @@ watchdog_thread.start()
 @app.route("/")
 def index():
     return """
-    <h1>ATV Avrupa HLS Streamer (Otomatik Yönetim)</h1>
+    <h1>ATV Avrupa HLS Streamer (Full hls.js & CORS Support)</h1>
     <ul>
         <li><a href='/hls_stream/master.m3u8'>Master Playlist</a></li>
         <li><a href='/hls_stream/atvavrupa_576p.m3u8'>576p Playlist</a></li>
@@ -205,29 +217,18 @@ def force_restart():
 def serve_hls(filename):
     global ffmpeg_process
     
-    # 1. Tarayıcının OPTIONS (Preflight) isteğine onay ver
+    # 1. hls.js Preflight (OPTIONS) İsteğini Güvenli Şekilde Yanıtla
     if request.method == "OPTIONS":
-        response = app.make_default_options_response()
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Range"
-        return response
+        return make_response("", 200)
 
     # 2. LAZY LOAD: İlk izleyici isteğinde yayın başlatılır
     if ffmpeg_process is None or ffmpeg_process.poll() is not None:
-        print("[LAZY LOAD] İlk izleyici isteği geldi. CNN Türk yayını başlatılıyor...")
+        print("[LAZY LOAD] İlk izleyici isteği geldi. ATV Avrupa yayını başlatılıyor...")
         start_ffmpeg_process()
         
-    response = send_from_directory(HLS_DIR, filename)
-    
-    # 3. hls.js Uyumlu Tam CORS Başlıkları
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Range"
-    response.headers["Access-Control-Expose-Headers"] = "Content-Length, Content-Range"
-    
-    return response
+    return send_from_directory(HLS_DIR, filename)
 
 if __name__ == "__main__":
+    start_ffmpeg_process()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
