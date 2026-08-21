@@ -26,7 +26,7 @@ last_start_time = 0
 TOKEN_REFRESH_INTERVAL = 2 * 60 * 60  # 2 saat (7200 saniye)
 
 # ==========================================
-# 0. GLOBAL CORS VE PREFLIGHT YÖNETİMİ (500 Hatası Önleyici)
+# 0. GLOBAL CORS VE PREFLIGHT YÖNETİMİ
 # ==========================================
 @app.after_request
 def add_cors_headers(response):
@@ -106,7 +106,7 @@ atvavrupa_360p.m3u8"""
         f.write(master_content)
 
 def start_ffmpeg_process():
-    """FFmpeg sürecini Thread Lock koruması ile güvenli bir şekilde başlatır."""
+    """FFmpeg sürecini dinamik iz haritası ve Thread Lock koruması ile başlatır."""
     global ffmpeg_process, last_start_time
 
     with process_lock:
@@ -119,32 +119,40 @@ def start_ffmpeg_process():
         if ffmpeg_process and ffmpeg_process.poll() is None:
             ffmpeg_process.kill()
 
-        url_576p = build_variant_url(token_m3u8_url, "_576p")
-        url_360p = build_variant_url(token_m3u8_url, "_360p")
-
         create_master_manifest()
 
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-reconnect", "1", "-reconnect_at_eof", "1",
-            "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-            "-i", url_576p,
-            "-reconnect", "1", "-reconnect_at_eof", "1",
-            "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-            "-i", url_360p,
-            "-map", "0:v?", "-map", "0:a?", "-c", "copy",
-            "-f", "hls", "-hls_time", "4", "-hls_list_size", "10",
-            "-hls_flags", "delete_segments+append_list",
-            os.path.join(HLS_DIR, "atvavrupa_576p.m3u8"),
-            "-map", "1:v?", "-map", "1:a?", "-c", "copy",
-            "-f", "hls", "-hls_time", "4", "-hls_list_size", "10",
-            "-hls_flags", "delete_segments+append_list",
-            os.path.join(HLS_DIR, "atvavrupa_360p.m3u8")
+        # Yayın kaliteleri ve dosya isimleri yapılandırması
+        tracks = [
+            {"suffix": "_576p", "name": "atvavrupa_576p.m3u8"},
+            {"suffix": "_360p", "name": "atvavrupa_360p.m3u8"}
         ]
+
+        track_urls = [build_variant_url(token_m3u8_url, item["suffix"]) for item in tracks]
+        track_names = [item["name"] for item in tracks]
+
+        # Temel FFmpeg komutu
+        ffmpeg_cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+
+        # Dinamik olarak Input (-i) parametrelerini ekleme
+        for url in track_urls:
+            ffmpeg_cmd.extend([
+                "-reconnect", "1", "-reconnect_at_eof", "1",
+                "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+                "-i", url
+            ])
+
+        # Dinamik olarak Map ve Output parametrelerini ekleme
+        for idx, (url, track_name) in enumerate(zip(track_urls, track_names)):
+            ffmpeg_cmd.extend([
+                "-map", f"{idx}:v?", "-map", f"{idx}:a?", "-c", "copy",
+                "-f", "hls", "-hls_time", "4", "-hls_list_size", "10",
+                "-hls_flags", "delete_segments+append_list",
+                os.path.join(HLS_DIR, track_name)
+            ])
 
         ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         last_start_time = time.time()  # Başlatma zamanını kaydet
-        print("[BİLGİ] ATV Avrupa FFmpeg süreci taze Token ile başlatıldı.")
+        print("[BİLGİ] ATV Avrupa FFmpeg süreci dinamik yapı ve taze Token ile başlatıldı.")
         return True
 
 # ==========================================
