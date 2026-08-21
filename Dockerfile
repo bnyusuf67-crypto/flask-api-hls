@@ -10,9 +10,9 @@ RUN apt-get update && \
 # Çalışma dizinini ayarla
 WORKDIR /app
 
-# Bağımlılıkları kopyala ve yükle
+# Bağımlılıkları kopyala ve en güncel sürümleriyle yükle
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
 # Proje dosyalarını kopyala
 COPY . .
